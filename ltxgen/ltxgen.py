@@ -334,7 +334,7 @@ def cmd_sheet(a: argparse.Namespace) -> None:
 
 def intro_cut(clip: Path, window: float = 2.5, thr: float = 0.25) -> float:
     """Time of a hard cut inside the first `window` seconds (0 if none). LTX/Ingredients shots sometimes open with
-    ~1 s of an unrelated composition and then cut to the real shot (F01 s16/s23, F02 s04)."""
+    ~1 s of an unrelated composition and then cut to the real shot."""
     r = subprocess.run([ffmpeg(), "-hide_banner", "-t", str(window), "-i", str(clip), "-vf",
                         f"select='gt(scene,{thr})',showinfo", "-an", "-f", "null", "-"], capture_output=True, text=True)
     ts = [float(t) for t in re.findall(r"pts_time:([\d.]+)", r.stderr)]
@@ -350,7 +350,7 @@ def stitch(clips: list[Path], dest: Path, transition: str = "cut", fade_s: float
     dest.parent.mkdir(parents=True, exist_ok=True)
     infos = [probe(c) for c in clips]
     # explicit per-clip trims (from QA: only confirmed sheet-leak intros) beat blind cut detection, which also cut
-    # away GOOD opening close-ups that hard-cut to a second angle (F11 s09/s12)
+    # away GOOD opening close-ups that hard-cut to a second angle
     starts = list(starts) if starts else [intro_cut(c) if trim_intro else 0.0 for c in clips]
     for i, st in zip(infos, starts):
         i["duration_s"] = (i.get("duration_s") or 0) - st

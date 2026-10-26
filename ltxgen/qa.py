@@ -1,4 +1,4 @@
-"""Automated QA for generated shots (used by the weekend benchmark).
+"""Automated QA for generated shots (used by factory.py qa / bench and the studio).
 
   shot VIDEO [--cast NAME ...] [--sheet SHEET.png] [--line "expected dialogue"] [--lang ar]
   film PROJECT_DIR_OR_STORYBOARD ...  (see factory.py)
@@ -79,7 +79,7 @@ _ref_cache: dict[str, list[np.ndarray]] = {}
 
 def cast_refs(name: str) -> list[np.ndarray]:
     """Reference embeddings for a cast member: face cutouts, source frame, and every 6th turnaround frame with a
-    face (multi-angle refs; weekend/exp_faceref.py: consistent 29/48 -> 41/48 on F01+F02, the remaining misses are
+    face (multi-angle refs match far more side and 3/4 views than a single front crop; the remaining misses are
     back views). Cached on disk as refs.npy."""
     if name in _ref_cache:
         return _ref_cache[name]
@@ -167,20 +167,20 @@ def leak_seconds(video: Path, sheet: Path, thr: float = 0.5) -> float:
 
 def panel_frame(gray: np.ndarray, sat: np.ndarray | None = None) -> bool:
     """True if a frame shows reference-sheet panels: a horizontal band of light-grey studio cells (~214) split by
-    >= 3 near-black vertical gutters. Sheet-independent (F02 s04 leaked with a sheet that was later rebuilt)."""
+    >= 3 near-black vertical gutters. Sheet-independent (works even if the sheet file was rebuilt after the render)."""
     h, w = gray.shape
-    g = cv2.resize(gray, (960, int(960 * h / w)), interpolation=cv2.INTER_AREA)  # 6 px gutters survive (F04 s16)
+    g = cv2.resize(gray, (960, int(960 * h / w)), interpolation=cv2.INTER_AREA)  # 6 px gutters survive
     hh = g.shape[0]
     light = (g > 190) & (g < 238)
     if sat is not None:  # sheet cells are NEUTRAL grey; rusty yellow machinery / white trucks with colour cast are not
         sg = cv2.resize(sat, (960, hh), interpolation=cv2.INTER_AREA)
         light &= sg < 30
-    # studio cells are FLAT (low local texture); skies/singlets/wood next to dark posts are not (F09 s05/s06 FPs)
+    # studio cells are FLAT (low local texture); skies/shirts/wood next to dark posts are not (false positives)
     gf = g.astype(np.float32)
     mu = cv2.blur(gf, (7, 7))
     sd = np.sqrt(np.maximum(cv2.blur(gf * gf, (7, 7)) - mu * mu, 0))
     light &= sd < 6
-    bh = hh // 8  # thin panel rows (F04 s16 strip was ~1/6 of the frame)
+    bh = hh // 8  # thin panel rows (a leaked strip can be ~1/6 of the frame)
     for y0 in range(0, hh - bh, max(1, hh // 48)):
         band = g[y0:y0 + bh]
         lb = light[y0:y0 + bh]
@@ -189,8 +189,8 @@ def panel_frame(gray: np.ndarray, sat: np.ndarray | None = None) -> bool:
         dark_cols = (band < 40).mean(axis=0) > 0.85
         d = np.diff(np.r_[0, dark_cols.astype(int), 0])
         starts, ends = np.flatnonzero(d == 1), np.flatnonzero(d == -1)
-        # a sheet gutter is a thin straight black line with flat grey cells on BOTH sides (F09 s06: dark wooden
-        # posts next to sky/singlet are not)
+        # a sheet gutter is a thin straight black line with flat grey cells on BOTH sides (dark wooden posts next
+        # to sky are not)
         col_light = lb.mean(axis=0)
         gutters = sum(1 for a, b in zip(starts, ends) if b - a <= 14 and a >= 16 and b + 16 < len(col_light)
                       and col_light[a - 16:a - 8].mean() > 0.5 and col_light[b + 8:b + 16].mean() > 0.5)
@@ -225,7 +225,7 @@ def audio_stats(path: Path) -> dict:
 
 
 def romanize(s: str) -> str:
-    """Latin-script approximation for comparing a romanized script line (F05 Hindi written as "baarish") with
+    """Latin-script approximation for comparing a romanized script line (e.g. Hindi written as "baarish") with
     Whisper's native-script output; collapses vowel-length spellings (aa/a, ii/ee/i, oo/uu/u)."""
     from unidecode import unidecode
     s = unidecode(s).lower()
@@ -249,7 +249,7 @@ def _num_words(n: int) -> str:
 
 
 def spell_numbers(s: str, lang: str | None = None) -> str:
-    """Whisper writes "25", scripts write "twenty-five" / "venticinque" (F06 s03, F10 s05: correct lines at CER 0.9)."""
+    """Whisper writes "25", scripts write "twenty-five" / "venticinque" (correct lines otherwise score CER ~0.9)."""
     def words(n: int) -> str:
         if lang and lang != "en":
             try:
@@ -265,14 +265,14 @@ def cer(ref: str, hyp: str, lang: str | None = None) -> float:
     if ref.isascii() and hyp.isascii():
         ref, hyp = spell_numbers(ref, lang), spell_numbers(hyp, lang)
     if lang == "ja" or re.search(r"[぀-ヿ]", ref + hyp):
-        # Japanese: compare readings (hiragana), since Whisper often picks other kanji/kana for the same sounds (F15)
+        # Japanese: compare readings (hiragana), since Whisper often picks other kanji/kana for the same sounds
         try:
             import pykakasi
             kks = pykakasi.kakasi()
             ref, hyp = ("".join(t["hira"] for t in kks.convert(x)) for x in (ref, hyp))
         except ImportError:
             pass
-    elif re.search(r"[一-鿿]", ref + hyp):  # traditional script vs Whisper's simplified output (F09)
+    elif re.search(r"[一-鿿]", ref + hyp):  # traditional script vs Whisper's simplified output
         try:
             from opencc import OpenCC
             t2s = OpenCC("t2s")
@@ -286,7 +286,7 @@ def cer(ref: str, hyp: str, lang: str | None = None) -> float:
     r, h = norm(ref), norm(hyp)
     if not r:
         return 0.0
-    if r in h:  # the line was said in full (actors repeat words: F10 s19 "Nonna, Nonna, Nonna") -> correct
+    if r in h:  # the line was said in full (actors repeat words: "Nonna, Nonna, Nonna") -> correct
         return 0.0
     d = list(range(len(h) + 1))
     for i, rc in enumerate(r, 1):
@@ -303,7 +303,7 @@ def shot_qa(video: Path, cast: list[str], sheet: Path | None, line: str | None, 
     gray = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY).astype(np.float32) for f in fr]
     res["motion"] = round(float(np.mean([np.mean(np.abs(a - b)) for a, b in zip(gray, gray[1:])])) / 255, 4) if len(gray) > 1 else 0
     res["black_ratio"] = round(sum(1 for g in gray if g.mean() < 12) / max(1, len(gray)), 3)
-    # pillar/letterbox bars (F06 s23 rendered 4:3 inside the 16:9 frame): edge bands near-black in most frames
+    # pillar/letterbox bars (a 4:3 picture inside the 16:9 frame): edge bands near-black in most frames
     def bars(g: np.ndarray) -> bool:
         h, w = g.shape
         pillar = g[:, : w // 12].mean() < 6 and g[:, -w // 12:].mean() < 6
@@ -311,7 +311,7 @@ def shot_qa(video: Path, cast: list[str], sheet: Path | None, line: str | None, 
         return (pillar or letter) and g.mean() > 25
     res["bars"] = sum(1 for g in gray if bars(g)) >= max(3, len(gray) // 2)
     # identity is only measurable on faces >= 72 px (1536-wide frames); smaller (wide/underwater) faces gave
-    # false "different face" flags in F01 (s12/s13/s16 at 0.17-0.26 while visually the same boy)
+    # false "different face" flags (scores of 0.17-0.26 for what is visually the same person)
     shot_faces = [e for f in fr for e in faces(f, 72)]
     res["faces_found"] = len(shot_faces)
     res["face_sim"] = {}

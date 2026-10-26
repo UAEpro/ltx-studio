@@ -485,7 +485,7 @@ def _redo(pid: str, sid: str, body: dict) -> dict:
     sb = json.loads(p["storyboard"])
     params = json.loads(s["params"])
     shot = next(x for x in sb["shots"] if x["id"] == sid)
-    if body.get("style") is not None:  # per-shot style override (F14: Earth scenes pulled into the ISS by the film style)
+    if body.get("style") is not None:  # per-shot style override (e.g. one scene in a different place than the film's style line implies)
         shot["style"] = body["style"]
     if body.get("prompt") or body.get("style") is not None:
         shot["prompt"] = (body.get("prompt") or shot["prompt"]).strip()

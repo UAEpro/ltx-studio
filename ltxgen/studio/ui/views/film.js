@@ -160,11 +160,11 @@ export async function filmView(root, fid, startStep) {
   // ---- 1 story
   function storyPanel(p) {
     const lenS = film.length_s || 180;
-    p.innerHTML = `<div class="panel-head"><div><h2>Story</h2><p>Write the idea in plain words. The AI writer turns it into characters, places and a full shot list using everything learned from the last 24 films.</p></div></div>
+    p.innerHTML = `<div class="panel-head"><div><h2>Story</h2><p>Write the idea in plain words. The AI writer turns it into characters, places and a full shot list following the rules that keep films consistent.</p></div></div>
     <div class="story-grid">
       <div class="card stack">
         <label class="field">The story <small>Who, where, what happens, how it ends. Real places and cultures work best.</small>
-          <textarea class="brief" id="brief" placeholder="On the last ferry across the Bosphorus…">${esc(film.logline || "")}</textarea></label>
+          <textarea class="brief" id="brief" placeholder="Who, where, what happens and how it ends…">${esc(film.logline || "")}</textarea></label>
         <div class="row between"><div class="row">
           <label class="field" style="min-width:200px">Writer<select id="engine"><option value="">Best available</option><option value="claude">Claude (API)</option><option value="local">Local model (Ollama)</option></select></label></div>
           <button class="btn primary lg" id="write">${icon("sparkle")} ${film.shots?.length ? "Rewrite the script" : "Write the script"}</button></div>

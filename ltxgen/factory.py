@@ -111,7 +111,7 @@ def asset_image(kind: str, key: str, spec: dict, film: dict, film_dir: Path) -> 
         try:
             res = json.loads(r.stdout)
             if res.get("ok") and kind == "prop" and has_person(res["path"]):
-                # a person in a prop panel becomes an extra character (F03 SUIT: a man's face in the Z-1 helmet)
+                # a person in a prop panel becomes an extra character (e.g. a face visible inside a helmet photo)
                 log(f"{kind} {key}: Commons {res['title']} shows a person -> rejected, rendering instead")
                 Path(res["path"]).rename(d / f"rejected_{kind}_{key}{Path(res['path']).suffix}")
                 res = {}
@@ -140,8 +140,8 @@ def ensure_cast(name: str, spec: dict, film: dict, film_dir: Path) -> str:
     src = spec.get("image")
     if not src and spec.get("commons"):
         src = asset_image("castref", name, {"commons": spec["commons"], "desc": spec["desc"]}, film, film_dir)
-    # fix 45: "standing upright ... arms at the sides" turned F18's sea turtle into a bipedal turtle-man. Animals
-    # (spec "animal": true) or any cast with a "pose" get that pose in the casting frame and the turnaround.
+    # "standing upright ... arms at the sides" turns animals into bipedal creatures. Animals (spec "animal": true)
+    # or any cast with a "pose" get that pose in the casting frame and the turnaround.
     pose = spec.get("pose") or ("in its natural animal posture on all four limbs, the whole body visible from nose to "
                                 "tail, seen from the front at a low angle" if spec.get("animal") else None)
     if not src:
@@ -172,7 +172,7 @@ def ensure_cast(name: str, spec: dict, film: dict, film_dir: Path) -> str:
 
 
 def role(film: dict, name: str) -> str:
-    """How prompts refer to a character. Names in prompts/sheets get painted as text (F01 s09: "SALM" on the hull),
+    """How prompts refer to a character. Names in prompts/sheets get painted into the picture as text,
     so prompts use a role ("the boy", "the captain") from cast[NAME]["role"]."""
     return film.get("cast", {}).get(name, {}).get("role") or "the person"
 
@@ -182,14 +182,14 @@ def derole(text: str, film: dict) -> str:
     for n in sorted(film.get("cast", {}), key=len, reverse=True):
         r = role(film, n)
         text = re.sub(rf"(^|[.!?:]\s+|\"\s*)\b{n}\b", lambda m: m.group(1) + r[:1].upper() + r[1:], text)
-        # "an exhausted SALEM" -> "an exhausted boy" (article + one adjective, not "a pearl to SALEM")
+        # "an exhausted NAME" -> "an exhausted boy" (article + one adjective, not "a gift to NAME")
         noun = re.sub(r"^(the|his|her|their) ", "", r)
         text = re.sub(rf"\b([Tt])he {n}\b", lambda m: (r[:1].upper() if m.group(1) == "T" else r[:1]) + r[1:], text)
         text = re.sub(rf"\b([Aa]n? (?!(?:to|and|of|with|for|from|at|on|in|by|as|or)\b)[\w-]+ ){n}\b",
                       lambda m: m.group(1) + noun, text)
         text = re.sub(rf"\b{n}\b", r, text)
-    # fix 48: prop names -> "the <noun phrase>" from the prop desc ("a small soft plush toy camel, light brown..." ->
-    # "the small soft plush toy camel"); "role" on the prop overrides.
+    # prop names -> "the <noun phrase>" from the prop desc ("a small red wooden toy boat, ..." ->
+    # "the small red wooden toy boat"); "role" on the prop overrides.
     for p in sorted(film.get("props", {}), key=len, reverse=True):
         spec = film["props"][p]
         r = spec.get("role") or "the " + re.sub(r"^(an?|the) ", "", spec.get("desc", p.lower()).split(",")[0])
@@ -199,13 +199,13 @@ def derole(text: str, film: dict) -> str:
 
 
 def opening_sentence(sh: dict, film: dict) -> str:
-    """Anti-leak opener for Ingredients shots (F01 s04 experiment X4): tell the model the first frame is the scene,
+    """Anti-leak opener for Ingredients shots: tell the model the first frame is the scene,
     not the reference sheet."""
-    # per-shot "setting" overrides the location desc when weather/time differ (F01 s18: storm vs "calm sea" opener)
+    # per-shot "setting" overrides the location desc when weather/time differ (a storm shot at a "calm sea" location)
     loc = sh.get("setting") or film.get("locations", {}).get(sh.get("location") or "", {}).get("desc")
     rl = [role(film, n) for n in sh.get("cast", [])]
     who = " and ".join([", ".join(rl[:-1]), rl[-1]] if len(rl) > 1 else rl)
-    # Close-ups: "opens directly on <wide location>" made the model frame wide (F02 s18 close-up came out wide);
+    # Close-ups: "opens directly on <wide location>" makes the model frame wide;
     # put the shot size and the person first and the location second.
     size = re.search(r"\b(extreme close-up|close-up|medium close-up)\b", sh.get("prompt", ""), re.I)
     if size and who:
@@ -223,14 +223,14 @@ HANDS = re.compile(r"\bclose-up on (?:his|her|their|the \w+'s) hands\b", re.I)
 
 
 def blocking(sh: dict, film: dict) -> str:
-    """Multi-character shots kept dropping the 2nd character (F04 s13/s22/s26, F05 s04) -> name who stands where."""
-    # fix 51: F23 s09 fused the two leads into one person (her jacket + backpack, his white hair). Name each role
-    # with its short look (first clause of the desc) so the model sees two different people.
+    """Multi-character shots tend to drop the 2nd character -> name who stands where."""
+    # Two similar-sized roles can fuse into one person (one's clothes, the other's hair). Name each role with its
+    # short look (first clause of the desc) so the model sees two different people.
     def look(n: str) -> str:
         d = film.get("cast", {}).get(n, {}).get("desc", "")
         return f"{role(film, n)} ({d.split(',')[0]})" if d else role(film, n)
     rl = [look(n) for n in sh.get("cast", [])] if len(sh.get("cast", [])) >= 2 else [role(film, n) for n in sh.get("cast", [])]
-    # fix 46: "visible the whole time" froze F18 s03's backward roll into the sea (splash, both still seated).
+    # "visible the whole time" freezes actions where someone leaves the frame (jumping into water, walking away).
     # Exit actions keep the left/right placement but not the "whole time".
     exits = EXIT.search(sh.get("prompt", ""))
     if len(rl) == 2:
@@ -250,22 +250,25 @@ CAST_STATE = re.compile(r"\b(pushed up|pulled up|holding|carrying|in (?:his|her|
 
 
 def lint(film: dict) -> list[str]:
-    """fix 44: F17 s27 "Back home, the dog sleeps on a cushion" was given setting "a Lisbon street at dusk"; the opener
-    wins and the shot renders an empty street. Flag shots whose action is indoors but whose setting/location is outdoors."""
+    """Script checks run before anything renders.
+
+    Indoor action with an outdoor setting: the opener sentence wins and the shot renders the empty outdoor place.
+    Flag shots whose action is indoors but whose setting/location is outdoors."""
     out = []
     for sh in film.get("shots", []):
         loc = sh.get("setting") or film.get("locations", {}).get(sh.get("location") or "", {}).get("desc", "")
         if INDOOR.search(sh.get("prompt", "")) and OUTDOOR.search(loc) and not INDOOR.search(loc):
             out.append(f"{sh['id']}: indoor action but outdoor setting '{loc[:60]}' -> add an indoor 'setting'")
     out += [f"{sh['id']}: no 'seconds'" for sh in film.get("shots", []) if not sh.get("seconds")]
-    # F19 s14 "the small toy camel" (no CAMEL) -> prop not on the sheet, rendered a live baby camel. The prop's head
-    # noun in a prompt that does not name the prop means fix 48 cannot help.
+    # A prop mentioned by its noun ("the toy horse") instead of its key (HORSE) never joins the sheet, and the model
+    # invents its own version (a real horse). Flag those so the key can be written.
     for p in film.get("props", {}):
         for sh in film.get("shots", []):
-            text = re.sub(r'"[^"]*"', "", sh.get("prompt", ""))  # dialogue may say "camel"
+            text = re.sub(r'"[^"]*"', "", sh.get("prompt", ""))  # dialogue may mention the noun
             if sh.get("cast") and "props" not in sh and re.search(rf"\b{p.lower()}s?\b", text) and not re.search(rf"\b{p}\b", text):
                 out.append(f"{sh['id']}: mentions '{p.lower()}' but not prop {p} -> write {p} so it joins the sheet")
-    # F18: "mask pushed up on her forehead" in the cast desc went underwater with them; F08: a fixed smile in every shot.
+    # A state in the cast desc ("mask pushed up on her forehead", "smiling") sticks to every shot, because the
+    # reference image wins over the prompt in close-ups.
     for n, c in film.get("cast", {}).items():
         m = CAST_STATE.search(c.get("desc", ""))
         if m:
@@ -281,7 +284,7 @@ def cmd_prepare(a: argparse.Namespace) -> None:
         log("LINT " + p)
     if problems and not getattr(a, "force", False):
         raise SystemExit("lint failed (fix the film.json or pass --force)")
-    # fix 35: casting/asset renders use the same GPU as the studio worker; two pipelines at once starve RAM and stall.
+    # Casting/asset renders use the same GPU as the studio worker; two pipelines at once starve RAM and stall.
     # Only wait when something actually has to be rendered (all casts + assets cached -> no wait).
     def cached(kind: str, key: str) -> bool:
         return any((film_dir / "assets" / f"{kind}_{key}{e}").exists() for e in (".jpg", ".png"))
@@ -303,7 +306,7 @@ def cmd_prepare(a: argparse.Namespace) -> None:
     cast_keys = {n: ensure_cast(n, s, film, film_dir) for n, s in film.get("cast", {}).items()}
     locs = {k: asset_image("loc", k, s, film, film_dir) for k, s in film.get("locations", {}).items()}
     props = {k: asset_image("prop", k, s, film, film_dir) for k, s in film.get("props", {}).items()}
-    if getattr(a, "assets_only", False):  # fix 25: stop for a visual check of panels/locations/props before submit
+    if getattr(a, "assets_only", False):  # stop for a visual check of panels/locations/props before submit
         review = film_dir / "assets_review.jpg"
         imgs = [castlib.CAST / k / "panel.png" for k in cast_keys.values()] + [Path(p) for p in locs.values()] + \
             [Path(p) for p in props.values()]
@@ -322,10 +325,9 @@ def cmd_prepare(a: argparse.Namespace) -> None:
         sheet.save(review, quality=88)
         print(json.dumps({"ok": True, "review": str(review), "cast": cast_keys, "locations": locs, "props": props}))
         return
-    # Location strip in the sheet: ON (fix 24). Without it (fix 16) the sheet is mostly light-grey cells and the
-    # grey bled into the video as a spreading milky haze (F03; exp 7722bbbd same seed: with strip clean, without
-    # strip hazy, strength 0.8 hazier). With it ~10% of shots leak the layout, which QA detects and autofix redoes;
-    # haze is not auto-detectable, so leaks are the cheaper failure.
+    # Location strip in the sheet: a sheet that is mostly light-grey cells can bleed into the video as a milky haze;
+    # a location strip reduces haze but makes layout leaks more likely (QA detects and autofix redoes those).
+    # Default is off (film "sheet_location": true turns it on); see build_shot.
     shots = [build_shot(film, sh, i, cast_keys, locs, props, film_dir) for i, sh in enumerate(film["shots"])]
     sb = {"title": f"{film['id']} {film['title']}", "preset": "standard", "aspect": film.get("aspect", "16:9"),
           "seed": film.get("seed", 1000), "style": film.get("style", ""), "transition": film.get("transition", "cut"),
@@ -343,19 +345,18 @@ def cmd_prepare(a: argparse.Namespace) -> None:
 
 def build_shot(film: dict, sh: dict, i: int, cast_keys: dict, locs: dict, props: dict, film_dir: Path) -> dict:
     """film.json shot -> studio storyboard shot (roles, opener, blocking, reference sheet). Shared by prepare + reshot."""
-    use_loc = film.get("sheet_location", False)  # fix 40: F09/F10 evidence (see STATUS) -> no location strip by default
+    use_loc = film.get("sheet_location", False)  # off by default: fewer layout leaks
     if True:
         st = {"id": sh["id"], "seconds": sh.get("seconds", 6), "prompt": derole(sh["prompt"], film),
               "seed": sh.get("seed", film.get("seed", 1000) + i)}
-        # a cast NAME mentioned in the prompt must be on the sheet, else the model invents a stranger (F02 s22)
+        # a cast NAME mentioned in the prompt must be on the sheet, else the model invents a stranger
         for n in film.get("cast", {}):
             if re.search(rf"\b{n}\b", sh["prompt"]) and n not in sh.setdefault("cast", []):
                 sh["cast"].append(n)
                 log(f"{sh['id']}: added {n} to cast (named in prompt)")
-        # fix 48: same for props - F19 s08 "hugging CAMEL" went out as the literal word CAMEL, no prop on the sheet,
-        # and the girl + toy were dropped. A named prop joins the sheet (when there are characters) and derole()
-        # replaces the name with the prop's noun phrase.
-        explicit = "props" in sh  # an explicit list (even []) is a deliberate choice (F19 s21, F21 bottle)
+        # same for props: a prop KEY in the prompt joins the sheet (when there are characters) and derole()
+        # replaces the key with the prop's noun phrase (a bare key would be read literally).
+        explicit = "props" in sh  # an explicit list (even []) is a deliberate choice (e.g. the holder is off screen)
         for p in film.get("props", {}):
             if not explicit and re.search(rf"\b{p}\b", sh["prompt"]) and p not in sh.setdefault("props", []):
                 sh["props"].append(p)
@@ -363,21 +364,21 @@ def build_shot(film: dict, sh: dict, i: int, cast_keys: dict, locs: dict, props:
         names = [cast_keys[n] for n in sh.get("cast", [])]
         sprops = sh.get("props", [])
         loc = sh.get("location")
-        # prop-only shots (no character) render from text: their sheets leaked/froze as the prop photo itself
-        # (F01 s27 pearl, F04 s08 falcon = the whole clip was the prop cell). film "prop_only_sheets": true re-enables.
-        # fix 52: hands-only close-ups with a sheet reproduced the whole sheet for the full clip (F23 s19 twice,
-        # F22 s11). Render them from text, with each character's short look so sleeves/cuffs still match.
+        # prop-only shots (no character) render from text: their sheets tend to freeze as the prop photo itself.
+        # film "prop_only_sheets": true re-enables them.
+        # Hands-only close-ups with a sheet tend to reproduce the whole sheet for the full clip. Render them from
+        # text, with each character's short look so sleeves/cuffs still match.
         if names and HANDS.search(sh["prompt"]):
             looks = "; ".join(f"{role(film, n)}: {film['cast'][n]['desc'].split(',')[0]}" for n in sh.get("cast", []))
             st["prompt"] = f"({looks}.) " + st["prompt"]
-            log(f"{sh['id']}: hands close-up -> text only (fix 52)")
+            log(f"{sh['id']}: hands close-up -> text only")
         elif names or (sprops and film.get("prop_only_sheets", False)):
             sheet = castlib.compose_sheet(
                 names, locs.get(loc) if loc and names and use_loc and film["locations"][loc].get("in_sheet", True) else None, [props[p] for p in sprops], film_dir / "sheets" / f"{sh['id']}.png",
                 film["locations"][loc]["desc"] if loc and names and use_loc and film["locations"][loc].get("in_sheet", True) else None, [film["props"][p]["desc"] for p in sprops],
                 [role(film, n) for n in sh.get("cast", [])])
             st["ingredients"] = {"sheet": sheet["sheet"], "desc": sheet["sheet_desc"], "strength": 1.0}
-            if names:  # opener only with characters: on prop close-ups it pulled the shot back to the wide location (F01 s27)
+            if names:  # opener only with characters: on prop close-ups it pulls the shot back to the wide location
                 st["prompt"] = opening_sentence(sh, film) + blocking(sh, film) + st["prompt"]
     return st
 
@@ -451,9 +452,9 @@ def cmd_status(a: argparse.Namespace) -> None:
 
 
 def script_lang(text: str) -> str | None:
-    """Whisper language from the line's script. Forcing "en" on Japanese made Whisper TRANSLATE (F02: every line
-    scored CER 1.0 while the audio was correct Japanese). Latin script -> None (auto-detect: en/es/it/...)."""
-    if re.search(r"[唔咗哋嘅喺冇咁啲嗰佢乜嚟]", text):  # Cantonese-only characters (F09: forced "zh" gave Mandarin)
+    """Whisper language from the line's script. Forcing "en" on Japanese makes Whisper TRANSLATE (every line
+    scores CER 1.0 while the audio is correct Japanese). Latin script -> None (auto-detect: en/es/it/...)."""
+    if re.search(r"[唔咗哋嘅喺冇咁啲嗰佢乜嚟]", text):  # Cantonese-only characters (forcing "zh" gives Mandarin)
         return "yue"
     for pat, lang in ((r"[؀-ۿ]", "ar"), (r"[぀-ヿ]", "ja"), (r"[가-힯]", "ko"),
                       (r"[一-鿿]", "zh"), (r"[ऀ-ॿ]", "hi"), (r"[Ѐ-ӿ]", "ru")):
@@ -473,16 +474,16 @@ def cmd_qa(a: argparse.Namespace) -> None:
             q = re.findall(r'"([^"]{2,120})"', sp["prompt"])
             if q:
                 sp["line"] = " ".join(q)
-                # fix 53: mixed-language films (F23: Turkish film with a Japanese and English lines) - Whisper forced to
-                # dialogue_lang turned Japanese into Turkish words and hallucinated "Altyazi M.K." on "The railing!".
+                # mixed-language films: Whisper forced to the film's dialogue_lang turns lines in other languages into
+                # nonsense in that language (or hallucinated subtitle credits on short English lines).
                 # Order: explicit lang > the line's own script > "in English" before an ASCII line > film language.
                 eng = re.search(r'\bin English\b', sp["prompt"], re.I) or \
                     (len(q) == 1 and not re.search(r'\bin [A-Z][a-z]+\b', sp["prompt"]) and sp["line"].isascii()
                      and film.get("dialogue_lang") not in (None, "en"))
                 sp["lang"] = sp.get("lang") or script_lang(sp["line"]) or ("en" if eng else None) \
                     or film.get("dialogue_lang")
-    # fix 38: Whisper (~2 GB) loaded during a render starved RAM and crashed the LTX text-encoder load (F09 s21, s24).
-    # --no-speech (used by watch.sh while rendering) skips it; speech is scored at film end. Loaded lazily.
+    # Whisper (~2 GB) loaded during a render can starve RAM and crash the LTX text-encoder load.
+    # --no-speech (used while shots are rendering) skips it; speech is scored at film end. Loaded lazily.
     _tr = {}
 
     def tr(video, lang):
@@ -522,7 +523,7 @@ def cmd_qa(a: argparse.Namespace) -> None:
             flags.append("frozen")
         if r.get("bars"):
             flags.append("bars")
-        # fix 50: intended night shots (F20 s28 lit tower at night, black_ratio 0.25) are dark by design;
+        # intended night shots are dark by design;
         # only flag them when they are almost entirely black.
         night = re.search(r"\b(night|at dusk|dark)\b", (spec.get("setting") or "") + " " + spec.get("prompt", ""), re.I)
         if r["black_ratio"] > (0.6 if night else 0.2):
@@ -533,7 +534,7 @@ def cmd_qa(a: argparse.Namespace) -> None:
         results[key] = r
         log(f"QA {key}: flags={flags} face={r.get('face_sim')} leak={r.get('sheet_leak')}")
     (film_dir / "qa.json").write_text(json.dumps({"shots": results}, ensure_ascii=False, indent=2), encoding="utf-8")
-    # fix 41: trim only confirmed sheet-leak intros (current versions) at stitch time
+    # trim only confirmed sheet-leak intros (current versions) at stitch time
     trims = {}
     for sh in p["shots"]:
         r = results.get(f"{sh['id']}@v{sh['version']}") or {}
@@ -548,8 +549,8 @@ def cmd_qa(a: argparse.Namespace) -> None:
 
 
 def cmd_autofix(a: argparse.Namespace) -> None:
-    """Redo shots whose latest version leaked the reference sheet (fix 12): rebuild the sheet without the
-    location strip, keep the opener, new seed. At most 2 automatic attempts per shot (then needs my review)."""
+    """Redo shots whose latest version leaked the reference sheet: rebuild the sheet without the
+    location strip, keep the opener, new seed. At most 2 automatic attempts per shot (then it needs a human review)."""
     film_dir = Path(a.film_dir).resolve()
     film, state = load(film_dir)
     qa_res = json.loads((film_dir / "qa.json").read_text("utf-8"))["shots"] if (film_dir / "qa.json").exists() else {}
@@ -572,7 +573,7 @@ def cmd_autofix(a: argparse.Namespace) -> None:
         if not names and "ingredients" in sbs:  # prop-only shot: drop the sheet entirely
             body["ingredients"] = None
             how = "no sheet (prop-only)"
-        if tries[s["id"]] >= 2 and names:  # 1st retry: new seed only (no-location sheets haze, fix 24)
+        if tries[s["id"]] >= 2 and names:  # 1st retry: new seed only (no-location sheets can haze)
             sheet = castlib.compose_sheet(names, None, [state["props"][p] for p in sprops],
                                           film_dir / "sheets" / f"{s['id']}_noloc.png", None,
                                           [film["props"][p]["desc"] for p in sprops],

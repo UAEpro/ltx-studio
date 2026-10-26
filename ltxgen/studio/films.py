@@ -44,7 +44,7 @@ JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 router = APIRouter()
 STAGES = ("story", "cast", "shots", "render", "review", "final")
-GPU_KINDS = {"assets"}  # casting renders share the GPU with the worker (fix 35: never two pipelines at once)
+GPU_KINDS = {"assets"}  # casting renders share the GPU with the worker (never two pipelines at once)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -442,7 +442,7 @@ def use_version(fid: str, sid: str, body: dict = Body(...)) -> dict:
 
 @router.post("/api/films/{fid}/shots/{sid}/trim")
 def trim_shot(fid: str, sid: str, body: dict = Body(...)) -> dict:
-    """Cut the first N seconds of a shot (e.g. a short sheet flash) and re-stitch (fix 43)."""
+    """Cut the first N seconds of a shot (e.g. a short sheet flash) and re-stitch."""
     fdir, state = _state(fid)
     sec = max(0.0, min(5.0, float(body.get("seconds", 0))))
     film = _read(fdir / "film.json", {})
@@ -589,7 +589,7 @@ def _ollama_json(prompt: str, model: str) -> str:
         return json.load(r)["message"]["content"]
 
 
-# --------------------------------------------------------------------------- monitor (replaces watch.sh)
+# --------------------------------------------------------------------------- monitor
 _mon: dict[str, dict] = {}
 
 
@@ -618,7 +618,7 @@ def _monitor() -> None:
                          (d / "final.mp4").stat().st_mtime < Path(STUDIO / "projects" / st["project_id"] /
                                                                     "final.mp4").stat().st_mtime):
                     m["finished"] = key
-                    # fix 38: Whisper during another film's render crashed it -> speech QA only when the GPU is free
+                    # Whisper during another film's render can crash it -> speech QA only when the GPU is free
                     _chain(d.name, [("finish", []), ("qa", [] if not _gpu_busy() else ["--no-speech"])], "finish film")
         except Exception as e:  # noqa: BLE001
             print("[film monitor]", e, file=sys.stderr)

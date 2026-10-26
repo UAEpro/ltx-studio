@@ -99,10 +99,10 @@ Turkish, Norwegian, modern Japanese and Arabic, and **no** sheet leaks left in t
 archaic Japanese dialogue (these need a recorded voice track).
 
 <table><tr>
-<td align="center"><img src="docs/posters/F23.jpg" width="200"></td>
-<td align="center"><img src="docs/posters/F21.jpg" width="200"></td>
-<td align="center"><img src="docs/posters/F24.jpg" width="200"></td>
-<td align="center"><img src="docs/posters/F16.jpg" width="200"></td>
+<td align="center"><img src="docs/posters/poster1.jpg" width="200"></td>
+<td align="center"><img src="docs/posters/poster2.jpg" width="200"></td>
+<td align="center"><img src="docs/posters/poster3.jpg" width="200"></td>
+<td align="center"><img src="docs/posters/poster4.jpg" width="200"></td>
 </tr></table>
 
 ## Writing prompts that work

@@ -644,9 +644,9 @@ class Worker:
             err_msg = "ltxgen reported ok but video.mp4 is missing"
         tail = res.get("error_tail") or tail_lines(wd / "log.txt") or (err or "").strip().splitlines()[-25:]
         log_text = (wd / "log.txt").read_text("utf-8", errors="replace") if (wd / "log.txt").exists() else ""
-        abrupt = "Traceback" not in log_text + (err or "")  # native crash mid-load (F09 s21, Sat 14:41): no Python error
+        abrupt = "Traceback" not in log_text + (err or "")  # native crash mid-load: no Python error
         if ("invalid python storage" in log_text + (err or "") or abrupt) and not task.get("_retried"):
-            # transient weight-loading failure (F06 s26, Sat 05:37): a plain retry renders fine
+            # transient weight-loading failure: a plain retry renders fine
             log.warning("task %s: transient 'invalid python storage' -> retrying once", tid)
             task["_retried"] = True
             return self.run_task(task)

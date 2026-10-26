@@ -38,7 +38,7 @@ export function newFilm() {
   const m = modal("New film", `<div class="stack">
     <label class="field">Title<input id="nf-title" type="text" placeholder="e.g. The Night Ferry" autofocus></label>
     <label class="field">What is it about? <small>A few sentences are enough - you can refine it in the Story step.</small>
-      <textarea id="nf-log" rows="5" placeholder="On the last ferry across the Bosphorus, an old tea seller helps a Japanese backpacker find her lost passport..."></textarea></label>
+      <textarea id="nf-log" rows="5" placeholder="A retired lighthouse keeper teaches his granddaughter to sail before the storm season..."></textarea></label>
     <div class="row"><label class="field grow">Aspect<div class="seg" id="nf-aspect">
       <button class="on" data-v="16:9">16:9 film</button><button data-v="9:16">9:16 vertical</button><button data-v="1:1">1:1</button></div></label>
       <label class="field grow">Length<div class="seg" id="nf-len"><button data-v="60">1 min</button><button data-v="120">2 min</button>
