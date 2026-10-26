@@ -140,6 +140,15 @@ def multipart(fields: dict[str, str], files: dict[str, Path]) -> tuple[str, int,
 def gpu_info() -> tuple[str | None, int | None]:
     exe = shutil.which("nvidia-smi")
     if not exe:
+        if sys.platform == "darwin" and os.uname().machine == "arm64":  # Apple Silicon: unified memory
+            try:
+                chip = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True,
+                                      text=True, timeout=10).stdout.strip() or "Apple Silicon"
+                mem = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True,
+                                         timeout=10).stdout.strip())
+                return chip, round(mem / 2**30)
+            except Exception:
+                return "Apple Silicon", None
         return None, None
     try:
         r = subprocess.run([exe, "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
@@ -178,7 +187,8 @@ class Models:
         self.dir = root / "models" / "ltx-2.5"
         self.files = getattr(ltxgen, "FILES", FILES)
         self.cfg = ltxgen.load_config() if ltxgen and hasattr(ltxgen, "load_config") else {}
-        self.venv = root / "LTX-2" / ".venv" / "Scripts" / "python.exe"
+        self.venv = (root / "LTX-2" / ".venv" / "Scripts" / "python.exe" if os.name == "nt"
+                     else root / "LTX-2" / ".venv" / "bin" / "python")
 
     def has(self, key: str) -> bool:
         p = self.dir / self.files[key]
@@ -218,8 +228,11 @@ def kill_tree(proc: subprocess.Popen) -> None:
         return
     if os.name == "nt":
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
-    else:
-        proc.kill()
+    else:  # the render runs in its own session (start_new_session) -> kill the whole group
+        try:
+            os.killpg(proc.pid, 9)
+        except OSError:
+            proc.kill()
 
 
 def tail_lines(path: Path, n: int = 25, nbytes: int = 65536) -> list[str]:
@@ -596,7 +609,8 @@ class Worker:
         with self.lock:
             self.log_path = wd / "log.txt"
             self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                         encoding="utf-8", errors="replace", env=env, creationflags=flags)
+                                         encoding="utf-8", errors="replace", env=env, creationflags=flags,
+                                         start_new_session=os.name != "nt")
             proc = self.proc
             if self.cancel.is_set():
                 kill_tree(proc)

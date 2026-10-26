@@ -23,7 +23,7 @@ leaks into the frame. LTX Studio is the pipeline that handles that, wrapped in a
 knowing how it works.
 
 - **Runs on a 16 GB GPU.** The 22B model doesn't fit in VRAM; it is streamed block by block with a 4-bit NVFP4
-  transformer (a runtime patch plus a Windows build of the NVFP4 kernel).
+  transformer (a runtime patch plus a Windows build of the NVFP4 kernel). Windows, Linux and Apple Silicon Macs.
 - **Consistent characters.** Every character is cast once and appears from a reference sheet in every shot.
 - **Video *and* audio.** Ambience, music and spoken dialogue in many languages.
 - **Simple, not a node graph.** Six clear steps per film, one screen each - no wiring.
@@ -122,19 +122,54 @@ The AI writer and the script linter already follow these, but they help when you
 
 ## Quick start
 
-**Requirements:** Windows 11, an NVIDIA RTX GPU with 16 GB+ VRAM, 32 GB RAM, ~120 GB free disk.
+### Supported systems
+
+| | Renders on | Model | Notes |
+|---|---|---|---|
+| **Windows 11** | NVIDIA RTX, 16 GB+ VRAM | 4-bit NVFP4 (fast) + fp8 for consistency | Developed and tested on an RTX 5080 |
+| **Linux** (Ubuntu 22.04+ or similar) | NVIDIA RTX, 16 GB+ VRAM | 4-bit NVFP4 (fast) + fp8 for consistency | Studio, setup and worker tested; rendering uses the same engine as Windows |
+| **macOS** | Apple Silicon (M1 or newer), 64 GB+ unified memory | full-precision bf16 (NVFP4/fp8 are NVIDIA-only) | Slower; 96 GB+ recommended |
+
+All systems need 32 GB+ RAM and ~120 GB free disk. A computer without a supported GPU can still run the studio and
+send shots to render workers on other PCs.
+
+### Windows
 
 ```powershell
-git clone https://github.com/UAEpro/ltx-studio D:\video
-cd D:\video
+git clone https://github.com/UAEpro/ltx-studio D:\ltx-studio
+cd D:\ltx-studio
 powershell -ExecutionPolicy Bypass -File ltxgen\studio\install.ps1
 ```
 
-The installer sets up the app's small Python environment, adds a desktop shortcut and opens
-**http://localhost:7860/#/setup**. Press **Install everything**: Git, FFmpeg, CUDA, the LTX-2 engine and the models
-install with live progress. The character-consistency model is gated on Hugging Face - accept its licence there and
-paste a token in **Settings** first. Optionally add a Claude API key (or install [Ollama](https://ollama.com)) for the
-AI script writer.
+### Linux / macOS
+
+```bash
+git clone https://github.com/UAEpro/ltx-studio ~/ltx-studio
+cd ~/ltx-studio
+bash ltxgen/studio/install.sh
+```
+
+Linux needs `git`, `ffmpeg` and a C++ compiler (`sudo apt install git ffmpeg build-essential`); macOS needs
+[Homebrew](https://brew.sh) (`brew install git ffmpeg`). The Setup page shows the exact command for anything missing.
+
+### Then, in the browser
+
+The installer sets up the app's small Python environment and opens **http://localhost:7860/#/setup**. Press
+**Install everything**: the LTX-2 engine and the models install with live progress (the right model for your GPU is
+picked automatically). The character-consistency model is gated on Hugging Face - accept its licence there and paste a
+token in **Settings** first. Optionally add a Claude API key (or install [Ollama](https://ollama.com)) for the AI
+script writer.
+
+To start the studio again later: `ltxgen/studio/start_studio.ps1` (Windows) or `ltxgen/studio/start_studio.sh`.
+
+### More computers
+
+**Render farm → Add a computer.** Windows PCs download a join file that copies the engine and models from the PCs
+already in the farm. Linux and macOS computers run one command that the page shows for you:
+
+```bash
+curl -fsSL http://YOUR-STUDIO-PC:7860/join.sh | HF_TOKEN=hf_xxx bash
+```
 
 Then: **Films → New film**, describe a story, and follow the six blocks.
 

@@ -17,6 +17,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -26,7 +27,24 @@ from pathlib import Path
 
 ROOT = Path(os.environ.get("LTXGEN_ROOT") or Path(__file__).resolve().parent.parent)  # install root = parent of ltxgen/
 REPO = ROOT / "LTX-2"
-VENV_PY = REPO / ".venv" / "Scripts" / "python.exe"
+SYSTEM = platform.system()  # Windows | Linux | Darwin
+
+
+def venv_python(venv: Path) -> Path:
+    """Python inside a uv/venv environment (Scripts\\python.exe on Windows, bin/python elsewhere)."""
+    return venv / "Scripts" / "python.exe" if SYSTEM == "Windows" else venv / "bin" / "python"
+
+
+def accelerator() -> str:
+    """cuda (NVIDIA, Windows/Linux) | mps (Apple Silicon) | cpu. Cheap: no torch import."""
+    if shutil.which("nvidia-smi"):
+        return "cuda"
+    if SYSTEM == "Darwin" and platform.machine() == "arm64":
+        return "mps"
+    return "cpu"
+
+
+VENV_PY = venv_python(REPO / ".venv")
 MODELS = ROOT / "models" / "ltx-2.5"
 OUTPUTS = ROOT / "outputs"
 CONFIG = Path(__file__).with_name("config.json")
@@ -63,10 +81,15 @@ DEFAULT_CONFIG = {
     "video_vae": "video_vae",            # video_vae (diffusion decoder) | video_vae_conv (faster)
     "fps": 24,
 }
+# Apple Silicon (MPS) has no fp8 / NVFP4: full-precision bf16 transformer, no quantization. Unified memory means
+# "cpu" offload buys nothing; streaming from disk keeps peak memory down on 64 GB machines.
+MPS_CONFIG = {"transformer": "transformer_bf16", "quantization": "none", "offload": "disk"}
 
 
 def load_config() -> dict:
     cfg = dict(DEFAULT_CONFIG)
+    if accelerator() == "mps":
+        cfg.update(MPS_CONFIG)
     if CONFIG.exists():
         cfg.update(json.loads(CONFIG.read_text(encoding="utf-8")))
     return cfg
@@ -161,8 +184,11 @@ def cmd_generate(a: argparse.Namespace) -> None:
         w, h = (896, 1536) if portrait else (1536, 896)
         # LoRA fusion can't stream NVFP4. Prefer the fp8 pre-cast copy (make_fp8_checkpoint.py): identical math,
         # half the bytes streamed per step.
-        cfg["quantization"] = "fp8-cast"
-        cfg["transformer"] = "transformer_fp8" if mpath("transformer_fp8").exists() else "transformer_bf16"
+        if accelerator() == "cuda":
+            cfg["quantization"] = "fp8-cast"
+            cfg["transformer"] = "transformer_fp8" if mpath("transformer_fp8").exists() else "transformer_bf16"
+        else:  # MPS/CPU: no fp8 - plain bf16, LoRA fused at load
+            cfg["quantization"], cfg["transformer"] = "none", "transformer_bf16"
         if not a.frames and not a.seconds:
             a.frames = 121
     seed = a.seed if a.seed is not None else int(time.time()) % 2_147_483_647
@@ -174,6 +200,8 @@ def cmd_generate(a: argparse.Namespace) -> None:
     if pipeline == "dfr_pipeline" and cfg["quantization"] == "nvfp4-prequant" and cfg["offload"] != "none":
         # DFR fuses the detailing LoRA into streamed blocks, which only bf16/fp8-cast support.
         cfg["quantization"], cfg["transformer"] = "fp8-cast", "transformer_bf16"
+    if accelerator() != "cuda" and cfg["quantization"] in ("nvfp4-prequant", "fp8-cast"):
+        cfg["quantization"], cfg["transformer"] = "none", "transformer_bf16"  # NVIDIA-only formats
     tkey = cfg["transformer"]
     if cfg["quantization"] == "nvfp4-prequant":
         tkey = "transformer_nvfp4"
@@ -462,11 +490,12 @@ def cmd_probe(a: argparse.Namespace) -> None:
 def cmd_doctor(_: argparse.Namespace) -> None:
     files = {k: {"path": str(mpath(k)), "exists": mpath(k).exists(),
                  "gb": round(mpath(k).stat().st_size / 1e9, 2) if mpath(k).exists() else 0} for k in FILES}
-    report = {"repo": REPO.exists(), "venv_python": VENV_PY.exists(), "ffmpeg": bool(shutil.which("ffmpeg")),
-              "config": load_config(), "files": files}
+    report = {"system": SYSTEM, "accelerator": accelerator(), "repo": REPO.exists(), "venv_python": VENV_PY.exists(),
+              "ffmpeg": bool(shutil.which("ffmpeg")), "config": load_config(), "files": files}
     if VENV_PY.exists():
         r = subprocess.run([str(VENV_PY), "-c",
                             "import torch,json;print(json.dumps({'torch':torch.__version__,'cuda':torch.cuda.is_available(),"
+                            "'mps':bool(getattr(torch.backends,'mps',None) and torch.backends.mps.is_available()),"
                             "'gpu':torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,"
                             "'cc':torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None}))"],
                            capture_output=True, text=True)
@@ -474,8 +503,9 @@ def cmd_doctor(_: argparse.Namespace) -> None:
             report["torch"] = json.loads(r.stdout.strip().splitlines()[-1])
         except Exception:
             report["torch"] = {"error": r.stderr[-500:]}
-        r = subprocess.run([str(VENV_PY), "-c", "import ltx_kernels; print('ok')"], capture_output=True, text=True)
-        report["ltx_kernels"] = r.stdout.strip() == "ok"
+        if accelerator() == "cuda":  # NVFP4 kernels are NVIDIA-only
+            r = subprocess.run([str(VENV_PY), "-c", "import ltx_kernels; print('ok')"], capture_output=True, text=True)
+            report["ltx_kernels"] = r.stdout.strip() == "ok"
     out({"ok": True, **report})
 
 

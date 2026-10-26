@@ -2,6 +2,7 @@
 # Models, films, renders, the LTX-2 engine checkout, studio state and secrets stay local.
 /*
 !/.gitignore
+!/.gitattributes
 !/README.md
 !/LICENSE
 !/CLAUDE.md

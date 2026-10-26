@@ -14,8 +14,8 @@ export async function setupView(root) {
     try { [st, jobs] = await Promise.all([api("/api/setup"), api("/api/jobs")]); } catch (e) { root.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
     const running = jobs.filter((j) => j.kind === "setup" && ["queued", "running"].includes(j.status));
     const missing = st.missing || [];
-    root.innerHTML = `<div class="page-head"><div><div class="eyebrow">Setup</div><h1>Get this PC ready</h1>
-      <p>Everything LTX Studio needs, checked live. Missing pieces install from here - tools through Windows Package Manager, the engine from GitHub, models from Hugging Face.</p></div></div>
+    root.innerHTML = `<div class="page-head"><div><div class="eyebrow">Setup</div><h1>Get this computer ready</h1>
+      <p>Everything LTX Studio needs, checked live (${esc({ Windows: "Windows", Linux: "Linux", Darwin: "macOS" }[st?.system] || "")}${st?.accelerator === "mps" ? " · Apple Silicon" : st?.accelerator === "cuda" ? " · NVIDIA" : ""}). Missing pieces install from here - the engine from GitHub, models from Hugging Face. Anything that needs your admin password shows the command to run in a terminal.</p></div></div>
       <div class="setup-hero"><div class="row" style="gap:16px">
         <div style="width:54px;height:54px;border-radius:16px;display:grid;place-items:center;background:${st.ready ? "var(--ok-soft)" : "var(--accent-soft)"};color:${st.ready ? "var(--ok)" : "var(--accent)"}">${icon(st.ready ? "check" : "download")}</div>
         <div><h2>${st.ready ? "Ready to make films" : `${missing.length} thing${missing.length === 1 ? "" : "s"} to install`}</h2>
@@ -29,6 +29,7 @@ export async function setupView(root) {
     if ($("#all")) $("#all").onclick = async () => {
       try { const r = await api("/api/setup/install-all", { body: {} }); toast(`Installing ${r.steps.length} item(s) one after another`, "ok"); setTimeout(load, 1500); } catch (e) { toast(e.message, "bad"); }
     };
+    $$("[data-copy]", root).forEach((b) => (b.onclick = () => { navigator.clipboard.writeText(b.dataset.copy); toast("Copied - paste it in a terminal", "ok"); }));
     $$("[data-install]", root).forEach((b) => (b.onclick = async () => {
       try { await api(`/api/setup/install/${b.dataset.install}`, { body: {} }); toast("Started", "ok"); setTimeout(load, 1000); } catch (e) { toast(e.message, "bad"); }
     }));
@@ -46,6 +47,7 @@ export async function setupView(root) {
     return `<div class="check"><span class="ic ${ic}">${icon(it.ok === true ? "check" : it.ok === false ? (optional ? "plus" : "x") : "info")}</span>
       <div><div class="t">${esc(it.title)}${it.level ? `<span class="level">${LEVEL[it.level] || it.level}</span>` : ""}${it.gb ? `<span class="level">${it.gb} GB</span>` : ""}</div>
         <div class="d">${esc(it.detail || it.why || "")}</div>${prog ? `<div class="bar"><span style="width:${Math.round(it.progress * 100)}%"></span></div>` : ""}</div>
+      ${it.manual ? `<div style="grid-column:2/-1"><div class="row" style="flex-wrap:nowrap;gap:6px"><input class="mono" readonly value="${esc(it.manual)}" style="font-size:11.5px;padding:5px 8px"><button class="btn sm" data-copy="${esc(it.manual)}">Copy</button></div></div>` : ""}
       <div>${it.install && it.ok !== true ? `<button class="btn sm ${it.ok === false && !optional ? "primary" : ""}" data-install="${it.key}" ${busy ? "disabled" : ""}>${it.key === "doctor" ? "Run" : it.key === "worker" ? "Start" : "Install"}</button>` : ""}</div></div>`;
   }
   await load();

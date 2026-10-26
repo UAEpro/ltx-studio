@@ -897,12 +897,29 @@ def join_file(req: Request) -> Response:
                     headers={"Content-Disposition": 'attachment; filename="join-ltx-studio.bat"'})
 
 
+@app.get("/join.sh", response_model=None)
+def join_sh(req: Request) -> Response:
+    """Linux/macOS render PC: `curl -fsSL http://MAINPC:7860/join.sh | bash` - clones LTX Studio, installs the engine
+    and models (Hugging Face; set HF_TOKEN first for the gated consistency model) and starts a worker for this farm."""
+    repo = CONFIG.get("repo_url", "https://github.com/UAEpro/ltx-studio")
+    sh = f"""#!/usr/bin/env bash
+set -euo pipefail
+DIR="${{LTX_DIR:-$HOME/ltx-studio}}"
+command -v git >/dev/null || {{ echo "git is required (Linux: sudo apt install git, macOS: xcode-select --install)"; exit 1; }}
+[ -d "$DIR/.git" ] || git clone {repo} "$DIR"
+git -C "$DIR" pull --ff-only || true
+bash "$DIR/ltxgen/studio/install.sh" --worker "{_server_base(req)}" "{CONFIG['token']}"
+"""
+    return Response(sh.encode(), media_type="text/x-shellscript")
+
+
 def main() -> None:
     import uvicorn
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=CONFIG.get("port", 7860))
     a = ap.parse_args()
+    CONFIG["port"] = a.port  # runtime only (join links, worker start); not written back
     threading.Thread(target=scheduler, daemon=True).start()
     threading.Thread(target=manifest_loop, daemon=True).start()
     films.start_background()

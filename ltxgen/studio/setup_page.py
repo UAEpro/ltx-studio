@@ -1,15 +1,23 @@
-"""Setup page backend: check what this PC has and install the rest from the web app.
+"""Setup page backend: check what this computer has and install the rest from the web app.
 
-Every component has check() -> {ok, detail} and an optional install command that runs as a background job
-(films.start_job) so the browser can show live output. Order matters: tools -> engine -> models -> helpers.
+Windows, Linux and macOS. Every component has a check (ok / detail) and, where it can be done without an admin
+password, an install command that runs as a background job (films.start_job) so the browser shows live output.
+Things that need sudo (apt packages, Homebrew itself) are shown with the exact command to paste in a terminal.
+
+Rendering backends: NVIDIA CUDA on Windows/Linux (4-bit NVFP4 model, fp8 for consistency renders) and Apple Silicon
+(MPS) on macOS (full-precision bf16 model - NVFP4/fp8 are NVIDIA-only).
+
+Headless use (e.g. from install.sh / a new worker PC):  python setup_page.py --install-all [--levels core,consistency]
 """
 from __future__ import annotations
 
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Body, HTTPException
@@ -21,39 +29,55 @@ import ltxgen  # noqa: E402
 ROOT = ltxgen.ROOT
 LTXGEN = HERE.parent
 REPO = ROOT / "LTX-2"
-REPO_PY = REPO / ".venv" / "Scripts" / "python.exe"
+REPO_PY = ltxgen.venv_python(REPO / ".venv")
 MODELS = ROOT / "models" / "ltx-2.5"
 QA_MODELS = ROOT / "models" / "qa"
 LTX_COMMIT = "e98f6d9"
+SYSTEM = ltxgen.SYSTEM            # Windows | Linux | Darwin
+WIN, MAC, LINUX = SYSTEM == "Windows", SYSTEM == "Darwin", SYSTEM == "Linux"
 router = APIRouter()
 
-# (key, title, repo, file in repo, local path under MODELS, GB, level, what it is for)
-MODEL_FILES = [
-    ("transformer_nvfp4", "Video model (NVFP4, fast)", "Lightricks/LTX-2.5", ltxgen.FILES["transformer_nvfp4"],
-     ltxgen.FILES["transformer_nvfp4"], 18.7, "core", "The 22B video+audio model, 4-bit for 16 GB GPUs."),
-    ("text_encoder", "Text encoder (Gemma)", "Lightricks/LTX-2.5", ltxgen.FILES["text_encoder"],
-     ltxgen.FILES["text_encoder"], 26.3, "core", "Reads your prompts."),
-    ("video_vae", "Video decoder", "Lightricks/LTX-2.5", ltxgen.FILES["video_vae"], ltxgen.FILES["video_vae"], 1.5,
-     "core", "Turns latents into frames."),
-    ("video_vae_conv", "Video decoder (low memory)", "Lightricks/LTX-2.5", ltxgen.FILES["video_vae_conv"],
-     ltxgen.FILES["video_vae_conv"], 1.5, "core", "Fallback decoder when VRAM is tight."),
-    ("audio_vae", "Audio decoder", "Lightricks/LTX-2.5", ltxgen.FILES["audio_vae"], ltxgen.FILES["audio_vae"], 0.4,
-     "core", "Sound, music and dialogue."),
-    ("spatial_upsampler", "Upscaler", "Lightricks/LTX-2.5", ltxgen.FILES["spatial_upsampler"],
-     ltxgen.FILES["spatial_upsampler"], 1.0, "core", "Second stage for 1280x704 output."),
-    ("duration_head", "Duration head", "Lightricks/LTX-2.5", ltxgen.FILES["duration_head"],
-     ltxgen.FILES["duration_head"], 0.01, "core", "Picks a clip length from the prompt."),
-    ("ingredients_lora", "Character consistency (Ingredients)", "Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients",
-     Path(ltxgen.FILES["ingredients_lora"]).name, ltxgen.FILES["ingredients_lora"], 1.3, "consistency",
-     "Keeps faces, outfits and props the same in every shot. Gated: accept the licence on Hugging Face first."),
-    ("transformer_bf16", "Full-precision model (to build fp8)", "Lightricks/LTX-2.5", ltxgen.FILES["transformer_bf16"],
-     ltxgen.FILES["transformer_bf16"], 42.0, "consistency", "Needed once to build the fp8 model below."),
-    ("detailing_lora", "Detail upscaler (quality preset)", "Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler",
-     Path(ltxgen.FILES["detailing_lora"]).name, ltxgen.FILES["detailing_lora"], 0.3, "quality",
-     "Only for the slow 1536x832 'quality' final pass."),
-    ("temporal_upsampler", "Temporal upscaler", "Lightricks/LTX-2.5", ltxgen.FILES["temporal_upsampler"],
-     ltxgen.FILES["temporal_upsampler"], 0.3, "quality", "Optional smoother motion."),
-]
+
+def _accel() -> str:
+    return ltxgen.accelerator()
+
+
+# (key, title, repo, file in repo, local path under MODELS, GB, level per accelerator, what it is for)
+# level: core = needed to render, consistency = needed for consistent characters, quality = optional, None = hidden
+def _model_files() -> list[tuple]:
+    cuda = _accel() == "cuda"
+    F = ltxgen.FILES
+    return [
+        ("transformer_nvfp4", "Video model (NVFP4, fast)", "Lightricks/LTX-2.5", F["transformer_nvfp4"],
+         F["transformer_nvfp4"], 18.7, "core" if cuda else None, "The 22B video+audio model, 4-bit for 16 GB GPUs."),
+        ("transformer_bf16", "Video model (full precision)" if not cuda else "Full-precision model (to build fp8)",
+         "Lightricks/LTX-2.5", F["transformer_bf16"], F["transformer_bf16"], 42.0,
+         "core" if not cuda else "consistency",
+         "The 22B video+audio model. Apple Silicon runs it in bf16 (needs a Mac with 64 GB+ memory)."
+         if not cuda else "Needed once to build the fp8 model below."),
+        ("text_encoder", "Text encoder (Gemma)", "Lightricks/LTX-2.5", F["text_encoder"], F["text_encoder"], 26.3,
+         "core", "Reads your prompts."),
+        ("video_vae", "Video decoder", "Lightricks/LTX-2.5", F["video_vae"], F["video_vae"], 1.5, "core",
+         "Turns latents into frames."),
+        ("video_vae_conv", "Video decoder (low memory)", "Lightricks/LTX-2.5", F["video_vae_conv"],
+         F["video_vae_conv"], 1.5, "core", "Fallback decoder when memory is tight."),
+        ("audio_vae", "Audio decoder", "Lightricks/LTX-2.5", F["audio_vae"], F["audio_vae"], 0.4, "core",
+         "Sound, music and dialogue."),
+        ("spatial_upsampler", "Upscaler", "Lightricks/LTX-2.5", F["spatial_upsampler"], F["spatial_upsampler"], 1.0,
+         "core", "Second stage for 1280x704 output."),
+        ("duration_head", "Duration head", "Lightricks/LTX-2.5", F["duration_head"], F["duration_head"], 0.01,
+         "core", "Picks a clip length from the prompt."),
+        ("ingredients_lora", "Character consistency (Ingredients)", "Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients",
+         Path(F["ingredients_lora"]).name, F["ingredients_lora"], 1.3, "consistency",
+         "Keeps faces, outfits and props the same in every shot. Gated: accept the licence on Hugging Face first."),
+        ("detailing_lora", "Detail upscaler (quality preset)", "Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler",
+         Path(F["detailing_lora"]).name, F["detailing_lora"], 0.3, "quality",
+         "Only for the slow 1536x832 'quality' final pass."),
+        ("temporal_upsampler", "Temporal upscaler", "Lightricks/LTX-2.5", F["temporal_upsampler"],
+         F["temporal_upsampler"], 0.3, "quality", "Optional smoother motion."),
+    ]
+
+
 FACE_MODELS = {
     "face_detection_yunet_2023mar.onnx":
         "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
@@ -69,38 +93,65 @@ def _run(cmd: list[str], timeout: int = 15) -> str:
         return ""
 
 
+# --------------------------------------------------------------------------- system checks
+def _ram_gb() -> int:
+    try:
+        if WIN:
+            import ctypes
+
+            class MS(ctypes.Structure):
+                _fields_ = [("l", ctypes.c_ulong), ("load", ctypes.c_ulong), ("total", ctypes.c_ulonglong),
+                            ("avail", ctypes.c_ulonglong), ("a", ctypes.c_ulonglong), ("b", ctypes.c_ulonglong),
+                            ("c", ctypes.c_ulonglong), ("d", ctypes.c_ulonglong), ("e", ctypes.c_ulonglong)]
+            ms = MS()
+            ms.l = ctypes.sizeof(MS)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))
+            return round(ms.total / 2**30)
+        if MAC:
+            return round(int(_run(["sysctl", "-n", "hw.memsize"]) or 0) / 2**30)
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                return round(int(line.split()[1]) / 2**20)
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
 def _gpu() -> dict:
     out = _run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"])
-    if not out:
-        return {"ok": False, "detail": "No NVIDIA GPU / driver found (nvidia-smi missing)."}
-    name, mem, drv = [x.strip() for x in out.splitlines()[0].split(",")]
-    gb = round(int(mem) / 1024)
-    return {"ok": gb >= 12, "detail": f"{name} · {gb} GB · driver {drv}", "warn": gb < 16}
+    if out:
+        name, mem, drv = [x.strip() for x in out.splitlines()[0].split(",")]
+        gb = round(int(float(mem)) / 1024)
+        return {"ok": gb >= 12, "detail": f"{name} · {gb} GB · driver {drv}", "warn": gb < 16}
+    if MAC and platform.machine() == "arm64":
+        chip = _run(["sysctl", "-n", "machdep.cpu.brand_string"]) or "Apple Silicon"
+        ram = _ram_gb()
+        return {"ok": ram >= 64, "warn": ram < 96,
+                "detail": f"{chip} · {ram} GB unified memory" + ("" if ram >= 64 else " - 64 GB+ needed to render")}
+    if MAC:
+        return {"ok": False, "detail": "Intel Mac - rendering needs Apple Silicon (M1 or newer) or an NVIDIA PC. "
+                                       "This Mac can still run the studio and send shots to other PCs."}
+    return {"ok": False, "detail": "No NVIDIA GPU / driver found (nvidia-smi missing). This computer can still run "
+                                   "the studio and send shots to render workers on other PCs."}
 
 
 def _ram_disk() -> tuple[dict, dict]:
-    import ctypes
-
-    class MS(ctypes.Structure):
-        _fields_ = [("l", ctypes.c_ulong), ("load", ctypes.c_ulong), ("total", ctypes.c_ulonglong),
-                    ("avail", ctypes.c_ulonglong), ("a", ctypes.c_ulonglong), ("b", ctypes.c_ulonglong),
-                    ("c", ctypes.c_ulonglong), ("d", ctypes.c_ulonglong), ("e", ctypes.c_ulonglong)]
-    ms = MS()
-    ms.l = ctypes.sizeof(MS)
-    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))
-    ram = round(ms.total / 2**30)
+    ram = _ram_gb()
     free = round(shutil.disk_usage(ROOT).free / 2**30)
-    need = sum(m[5] for m in MODEL_FILES if m[6] in ("core", "consistency") and not (MODELS / m[4]).exists()) + 25
-    return ({"ok": ram >= 30, "detail": f"{ram} GB RAM", "warn": ram < 30},
-            {"ok": free >= need, "detail": f"{free} GB free on {ROOT.drive or ROOT} (needs ~{round(need)} GB more)"
-             if need > 25 else f"{free} GB free on {ROOT.drive or ROOT}"})
+    need = sum(m[5] for m in _model_files() if m[6] in ("core", "consistency") and not (MODELS / m[4]).exists()) + 25
+    where = ROOT.drive or str(ROOT.anchor or ROOT)
+    ram_need = 64 if _accel() == "mps" else 30
+    return ({"ok": ram >= ram_need, "detail": f"{ram} GB RAM" + ("" if ram >= ram_need else f" ({ram_need} GB+ recommended)"),
+             "warn": ram < ram_need},
+            {"ok": free >= need, "detail": f"{free} GB free on {where} (needs ~{round(need)} GB more)"
+             if need > 25 else f"{free} GB free on {where}"})
 
 
 def _which(name: str) -> str | None:
     return shutil.which(name)
 
 
-def _cuda() -> str | None:
+def _cuda_win() -> str | None:
     base = Path(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA")
     vs = sorted((d for d in base.glob("v13.*") if (d / "bin" / "nvcc.exe").exists()), reverse=True) if base.exists() else []
     return str(vs[0]) if vs else None
@@ -113,6 +164,18 @@ def _vctools() -> bool:
         return False
     return bool(_run([str(vswhere), "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
                       "-property", "installationPath"]))
+
+
+_kernel_cache: dict = {"t": 0, "ok": False}
+
+
+def _kernel_ok() -> bool:
+    if not REPO_PY.exists():
+        return False
+    if time.time() - _kernel_cache["t"] > 120:
+        _kernel_cache.update(t=time.time(), ok=_run([str(REPO_PY), "-c", "import importlib.util as u;"
+                                                     "print(bool(u.find_spec('nvfp4_cpp')))"], timeout=60) == "True")
+    return _kernel_cache["ok"]
 
 
 def _model_state(m) -> dict:
@@ -130,58 +193,96 @@ def _model_state(m) -> dict:
 _downloading: dict[str, bool] = {}
 
 
+def _tool(key: str, title: str, ok: bool, detail_ok: str, manual: str | None, auto: bool) -> dict:
+    """auto: can install from the web app; manual: command the user runs (needs an admin password)."""
+    d = {"key": key, "title": title, "ok": ok,
+         "detail": detail_ok if ok else ("missing - needs your admin password, run this in a terminal:" if manual and not auto else "missing"),
+         "install": auto and not ok}
+    if manual and not ok and not auto:
+        d["manual"] = manual
+    return d
+
+
+def _tools() -> list[dict]:
+    git, uv, ff = _which("git"), _which("uv"), _which("ffmpeg")
+    if WIN:
+        wg = bool(_which("winget"))
+        return [
+            _tool("git", "Git", bool(git), git or "", None, wg),
+            _tool("uv", "uv (Python manager)", bool(uv), uv or "", None, wg),
+            _tool("ffmpeg", "FFmpeg", bool(ff), ff or "", None, wg),
+            {**_tool("cuda", "CUDA 13 toolkit", bool(_cuda_win()), _cuda_win() or "", None, wg),
+             **({} if _cuda_win() else {"detail": "missing (needed once to build the fast NVFP4 kernel)"})},
+            {**_tool("vctools", "C++ build tools", _vctools(), "Visual Studio 2022 Build Tools", None, wg),
+             **({} if _vctools() else {"detail": "missing (needed once for the kernel build)"})},
+        ]
+    if MAC:
+        brew = _which("brew")
+        items = [_tool("brew", "Homebrew", bool(brew), brew or "",
+                       '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+                       False)]
+        items += [_tool("git", "Git", bool(git), git or "", "xcode-select --install", bool(brew)),
+                  _tool("uv", "uv (Python manager)", bool(uv), uv or "", None, True),
+                  _tool("ffmpeg", "FFmpeg", bool(ff), ff or "", "brew install ffmpeg", bool(brew))]
+        return items
+    apt = "sudo apt install -y" if _which("apt") else ("sudo dnf install -y" if _which("dnf") else "install with your package manager:")
+    cc = _which("g++") or _which("c++")
+    items = [_tool("git", "Git", bool(git), git or "", f"{apt} git", False),
+             _tool("uv", "uv (Python manager)", bool(uv), uv or "", None, True),
+             _tool("ffmpeg", "FFmpeg", bool(ff), ff or "", f"{apt} ffmpeg", False)]
+    if _accel() == "cuda":
+        items.append({**_tool("cc", "C++ compiler", bool(cc), cc or "",
+                              f"{apt} build-essential" if "apt" in apt else f"{apt} gcc-c++", False),
+                      **({} if cc else {"detail": "missing (needed once to build the fast NVFP4 kernel) - run this in a terminal:"})})
+    return items
+
+
 def status() -> dict:
     ram, disk = _ram_disk()
-    winget = bool(_which("winget"))
+    accel = _accel()
+    engine = [
+        {"key": "repo", "title": "LTX-2 code", "ok": (REPO / "pyproject.toml").exists(),
+         "detail": str(REPO) if (REPO / "pyproject.toml").exists() else "not downloaded", "install": True},
+        {"key": "venv", "title": "Engine Python environment", "ok": REPO_PY.exists(),
+         "detail": str(REPO_PY) if REPO_PY.exists() else "not created", "install": True}]
+    if accel == "cuda":
+        k = _kernel_ok()
+        engine.append({"key": "kernel", "title": "Fast NVFP4 kernel", "ok": k, "install": True,
+                       "detail": "built" if k else "not built" + (" (needs CUDA 13 + C++ tools)" if WIN else "")})
+    models = [_model_state(m) | {"install": True} for m in _model_files() if m[6]]
+    if accel == "cuda":
+        models.append({"key": "transformer_fp8", "title": "fp8 model (for consistency renders)", "level": "consistency",
+                       "ok": (MODELS / ltxgen.FILES["transformer_fp8"]).exists(), "gb": 23.5,
+                       "why": "Built on this PC from the full-precision model (about 10 minutes).",
+                       "install": (MODELS / ltxgen.FILES["transformer_bf16"]).exists()})
     groups = [
         {"id": "system", "title": "This computer", "items": [
-            {"key": "gpu", "title": "NVIDIA GPU", **_gpu()},
+            {"key": "gpu", "title": "Apple Silicon GPU" if accel == "mps" else "NVIDIA GPU", **_gpu()},
             {"key": "ram", "title": "Memory", **ram},
             {"key": "disk", "title": "Disk space", **disk}]},
-        {"id": "tools", "title": "Tools", "items": [
-            {"key": "git", "title": "Git", "ok": bool(_which("git")), "detail": _which("git") or "missing",
-             "install": winget},
-            {"key": "uv", "title": "uv (Python manager)", "ok": bool(_which("uv")), "detail": _which("uv") or "missing",
-             "install": winget},
-            {"key": "ffmpeg", "title": "FFmpeg", "ok": bool(_which("ffmpeg")), "detail": _which("ffmpeg") or "missing",
-             "install": winget},
-            {"key": "cuda", "title": "CUDA 13 toolkit", "ok": bool(_cuda()), "detail": _cuda() or
-             "missing (needed once to build the fast NVFP4 kernel)", "install": winget},
-            {"key": "vctools", "title": "C++ build tools", "ok": _vctools(),
-             "detail": "Visual Studio 2022 Build Tools" if _vctools() else "missing (needed once for the kernel build)",
-             "install": winget}]},
-        {"id": "engine", "title": "LTX engine", "items": [
-            {"key": "repo", "title": "LTX-2 code", "ok": (REPO / "pyproject.toml").exists(),
-             "detail": str(REPO) if (REPO / "pyproject.toml").exists() else "not downloaded", "install": True},
-            {"key": "venv", "title": "Engine Python environment", "ok": REPO_PY.exists(),
-             "detail": str(REPO_PY) if REPO_PY.exists() else "not created", "install": True},
-            {"key": "kernel", "title": "Fast NVFP4 kernel", "ok": bool(list((REPO / ".venv" / "Lib" / "site-packages")
-                                                                           .glob("nvfp4_cpp*.pyd"))),
-             "detail": "built" if list((REPO / ".venv" / "Lib" / "site-packages").glob("nvfp4_cpp*.pyd"))
-             else "not built (needs CUDA 13 + C++ tools)", "install": True}]},
-        {"id": "models", "title": "Models", "items": [_model_state(m) | {"install": True} for m in MODEL_FILES] + [
-            {"key": "transformer_fp8", "title": "fp8 model (for consistency renders)", "level": "consistency",
-             "ok": (MODELS / ltxgen.FILES["transformer_fp8"]).exists(), "gb": 23.5,
-             "why": "Built on this PC from the full-precision model (about 10 minutes).",
-             "install": (MODELS / ltxgen.FILES["transformer_bf16"]).exists()}]},
+        {"id": "tools", "title": "Tools", "items": _tools()},
+        {"id": "engine", "title": "LTX engine", "items": engine},
+        {"id": "models", "title": "Models", "items": models},
         {"id": "helpers", "title": "Helpers", "items": [
             {"key": "facemodels", "title": "Face check models", "ok": all((QA_MODELS / f).exists() for f in FACE_MODELS),
              "detail": "used by casting and QA", "install": True},
             {"key": "doctor", "title": "Engine self-test", "ok": None, "detail": "runs ltxgen doctor", "install": True},
-            {"key": "worker", "title": "Render worker on this PC", "ok": _local_worker_online(),
+            {"key": "worker", "title": "Render worker on this computer", "ok": _local_worker_online(),
              "detail": "online" if _local_worker_online() else "not running", "install": True}]},
     ]
     need = [i for g in groups for i in g["items"] if i.get("ok") is False and g["id"] != "system"
             and i.get("level", "core") in ("core", "consistency")]
-    return {"groups": groups, "ready": not need and REPO_PY.exists(),
+    return {"groups": groups, "ready": not need and REPO_PY.exists(), "system": SYSTEM, "accelerator": accel,
             "missing": [i["title"] for i in need],
             "hf_token": bool(_hf_token()) or (MODELS / ltxgen.FILES["ingredients_lora"]).exists()}
 
 
 def _local_worker_online() -> bool:
     import socket
-    import time
-    import server
+    try:
+        import server
+    except Exception:  # noqa: BLE001  (headless CLI use)
+        return False
     host = socket.gethostname().lower()
     for w in server.q("SELECT info, last_seen FROM workers"):
         info = json.loads(w["info"] or "{}")
@@ -191,58 +292,91 @@ def _local_worker_online() -> bool:
 
 
 def _hf_token() -> str | None:
-    import server
-    return server.CONFIG.get("hf_token") or os.environ.get("HF_TOKEN")
+    try:
+        import server
+        return server.CONFIG.get("hf_token") or os.environ.get("HF_TOKEN")
+    except Exception:  # noqa: BLE001
+        return os.environ.get("HF_TOKEN")
 
 
+# --------------------------------------------------------------------------- installers
 WINGET = {"git": ["Git.Git"], "uv": ["astral-sh.uv"], "ffmpeg": ["Gyan.FFmpeg"],
           "cuda": ["Nvidia.CUDA", "--version", "13.0"],
           "vctools": ["Microsoft.VisualStudio.2022.BuildTools", "--override",
                       "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"]}
 
 
+def _py(code: str) -> list[str]:
+    return [sys.executable, "-c", code]
+
+
 def install_cmd(key: str) -> tuple[list[str], str]:
-    ps = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
-    if key in WINGET:
+    uv = _which("uv") or "uv"
+    if WIN and key in WINGET:
         wid, *extra = WINGET[key]
         return (["winget", "install", "-e", "--id", wid, "--accept-package-agreements",
                  "--accept-source-agreements", "--disable-interactivity", *extra], f"install {key}")
+    if MAC and key in ("git", "ffmpeg"):
+        return ([_which("brew") or "brew", "install", key], f"install {key}")
+    if key == "uv" and not WIN:
+        return (["sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"], "install uv")
     if key == "repo":
-        return (ps + [f"if (-not (Test-Path '{REPO}\\pyproject.toml')) {{ git clone https://github.com/Lightricks/LTX-2 "
-                      f"'{REPO}' }}; git -C '{REPO}' fetch origin; git -C '{REPO}' checkout --quiet {LTX_COMMIT}; "
-                      f"git -C '{REPO}' log -1 --oneline"], "download LTX-2 code")
+        return (_py("import subprocess as s,pathlib as p,sys;r=p.Path(sys.argv[1]);"
+                    "(r/'pyproject.toml').exists() or s.run(['git','clone','https://github.com/Lightricks/LTX-2',str(r)],check=True);"
+                    "s.run(['git','-C',str(r),'fetch','origin'],check=True);"
+                    f"s.run(['git','-C',str(r),'checkout','--quiet','{LTX_COMMIT}'],check=True);"
+                    "s.run(['git','-C',str(r),'log','-1','--oneline'])") + [str(REPO)], "download LTX-2 code")
     if key == "venv":
-        return (ps + [f"Set-Location '{REPO}'; uv sync --extra natten --inexact; "
-                      f"& powershell -NoProfile -ExecutionPolicy Bypass -File '{LTXGEN}\\setup_windows_extras.ps1'"],
-                "create engine environment")
+        extra = ["--extra", "natten"] if _accel() == "cuda" else []
+        if WIN:
+            return (["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                     f"Set-Location '{REPO}'; uv sync --extra natten --inexact; "
+                     f"& powershell -NoProfile -ExecutionPolicy Bypass -File '{LTXGEN}\\setup_windows_extras.ps1'"],
+                    "create engine environment")
+        return ([uv, "--directory", str(REPO), "sync", *extra, "--inexact"], "create engine environment")
     if key == "kernel":
-        return (["cmd", "/c", str(LTXGEN / "build_nvfp4.bat")], "build NVFP4 kernel")
+        if WIN:
+            return (["cmd", "/c", str(LTXGEN / "build_nvfp4.bat")], "build NVFP4 kernel")
+        _kernel_cache["t"] = 0
+        return ([uv, "--directory", str(REPO), "sync", "--extra", "natten", "--inexact",
+                 "--reinstall-package", "ltx-kernels"], "build NVFP4 kernel")
     if key == "transformer_fp8":
         return ([str(REPO_PY), str(LTXGEN / "make_fp8_checkpoint.py"), str(MODELS / ltxgen.FILES["transformer_bf16"]),
                  str(MODELS / ltxgen.FILES["transformer_fp8"])], "build fp8 model")
     if key == "facemodels":
-        cmds = "; ".join(f"Invoke-WebRequest -UseBasicParsing '{url}' -OutFile '{QA_MODELS / f}'"
-                         for f, url in FACE_MODELS.items())
-        return (ps + [f"New-Item -ItemType Directory -Force '{QA_MODELS}' | Out-Null; {cmds}; 'done'"],
-                "download face models")
+        pairs = json.dumps({str(QA_MODELS / f): url for f, url in FACE_MODELS.items()})
+        return (_py("import json,sys,pathlib,urllib.request as u\n"
+                    "for dst,url in json.loads(sys.argv[1]).items():\n"
+                    "    pathlib.Path(dst).parent.mkdir(parents=True,exist_ok=True); u.urlretrieve(url,dst); print(dst)")
+                + [pairs], "download face models")
     if key == "doctor":
         return ([sys.executable, str(LTXGEN / "ltxgen.py"), "doctor"], "engine self-test")
-    if key == "worker":
-        import server
-        return (ps + [f"Start-Process -WindowStyle Minimized -FilePath '{sys.executable}' -ArgumentList "
-                      f"'\"{LTXGEN / 'studio' / 'worker.py'}\"','--server','http://localhost:{server.CONFIG.get('port', 7860)}',"
-                      f"'--token','{server.CONFIG['token']}','--worker-id','main-' + $env:COMPUTERNAME.ToLower(),'--no-seed'; "
-                      "'worker started'"], "start render worker")
-    m = next((m for m in MODEL_FILES if m[0] == key), None)
+    m = next((m for m in _model_files() if m[0] == key), None)
     if m:
         _, title, repo, rfile, local, gb, level, why = m
         dest = MODELS / Path(local).parent
         py = str(REPO_PY) if REPO_PY.exists() else sys.executable
         code = ("import os,sys;os.environ['HF_HUB_DISABLE_XET']='1';from huggingface_hub import hf_hub_download;"
-                f"p=hf_hub_download({repo!r},{rfile!r},local_dir=r'{dest}',token=os.environ.get('HF_TOKEN') or None);"
-                "print('{\"ok\": true, \"path\": ' + repr(p).replace(\"'\", '\"') + '}')")
-        return ([py, "-c", code], f"download {title}")
+                "p=hf_hub_download(sys.argv[1],sys.argv[2],local_dir=sys.argv[3],token=os.environ.get('HF_TOKEN') or None);"
+                "print('{\"ok\": true}')")
+        return ([py, "-c", code, repo, rfile, str(dest)], f"download {title}")
     raise HTTPException(400, f"nothing to install for {key}")
+
+
+def start_worker() -> dict:
+    """Start the render worker on this computer as a detached process (survives the studio restarting)."""
+    import server
+    log = ROOT / "studio" / "worker.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [sys.executable, str(HERE / "worker.py"), "--server", f"http://localhost:{server.CONFIG.get('port', 7860)}",
+           "--token", server.CONFIG["token"], "--no-seed"]
+    kw: dict = {"stdout": open(log, "ab"), "stderr": subprocess.STDOUT, "cwd": str(ROOT)}
+    if WIN:
+        kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000008  # DETACHED_PROCESS
+    else:
+        kw["start_new_session"] = True
+    subprocess.Popen(cmd, **kw)
+    return {"ok": True, "log": str(log)}
 
 
 @router.get("/api/setup")
@@ -253,8 +387,12 @@ def setup_status() -> dict:
 @router.post("/api/setup/install/{key}")
 def setup_install(key: str) -> dict:
     import films
+    if key == "worker":
+        start_worker()
+        return films.start_job("setup", None, cmd=_py("print('render worker started - see studio/worker.log')"),
+                               title="start render worker")
     cmd, title = install_cmd(key)
-    if any(m[0] == key for m in MODEL_FILES):
+    if any(m[0] == key for m in _model_files()):
         _downloading[key] = True
         tok = _hf_token()
         if tok:
@@ -262,23 +400,25 @@ def setup_install(key: str) -> dict:
     return films.start_job("setup", None, cmd=cmd, title=title)
 
 
-@router.post("/api/setup/install-all")
-def setup_install_all(body: dict = Body(default={})) -> dict:
-    """Queue every missing core/consistency step in order (tools first). Runs one after another."""
-    import threading
-    import time
-    import films
-    levels = set(body.get("levels") or ["core", "consistency"])
-    st = status()
+def _plan(levels: set[str]) -> list[str]:
     order = []
-    for g in st["groups"]:
+    for g in status()["groups"]:
         if g["id"] == "system":
             continue
         for i in g["items"]:
             if i.get("ok") is False and i.get("install") and i.get("level", "core") in levels:
                 order.append(i["key"])
-    if "transformer_bf16" in order and "transformer_fp8" not in order:
+    if "transformer_bf16" in order and _accel() == "cuda" and "transformer_fp8" not in order:
         order.append("transformer_fp8")
+    return order
+
+
+@router.post("/api/setup/install-all")
+def setup_install_all(body: dict = Body(default={})) -> dict:
+    """Queue every missing installable step in order (tools first) and run them one after another."""
+    import threading
+    import films
+    order = _plan(set(body.get("levels") or ["core", "consistency"]))
 
     def run():
         for key in order:
@@ -311,4 +451,39 @@ def get_settings() -> dict:
     return {"hf_token": bool(c.get("hf_token") or os.environ.get("HF_TOKEN")),
             "anthropic_api_key": bool(c.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY")),
             "local_model": c.get("local_model", server.LOCAL_MODEL), "ollama_url": server.OLLAMA_URL,
-            "ollama_models": server._ollama_models(), "token": c["token"], "port": c.get("port", 7860)}
+            "ollama_models": server._ollama_models(), "token": c["token"], "port": c.get("port", 7860),
+            "lan_url": f"http://{server._lan_ip()}:{c.get('port', 7860)}"}
+
+
+# --------------------------------------------------------------------------- headless CLI
+def _cli() -> None:
+    import argparse
+    ap = argparse.ArgumentParser(description="LTX Studio setup without the browser")
+    ap.add_argument("--check", action="store_true", help="print what is missing")
+    ap.add_argument("--install-all", action="store_true", help="install every missing step that needs no sudo")
+    ap.add_argument("--levels", default="core,consistency", help="core,consistency,quality")
+    a = ap.parse_args()
+    st = status()
+    for g in st["groups"]:
+        print(f"\n{g['title']}")
+        for i in g["items"]:
+            mark = {True: "ok ", False: "-- ", None: "?? "}[i.get("ok")]
+            print(f"  {mark} {i['title']}: {i.get('detail') or i.get('why') or ''}")
+    if not a.install_all:
+        return
+    for key in _plan(set(a.levels.split(","))):
+        if key == "worker":
+            continue
+        cmd, title = install_cmd(key)
+        print(f"\n==> {title}", flush=True)
+        r = subprocess.run(cmd, cwd=str(ROOT), env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        if r.returncode:
+            print(f"    failed ({r.returncode}) - fix it and re-run", flush=True)
+            sys.exit(r.returncode)
+    manual = [i for g in status()["groups"] for i in g["items"] if i.get("manual")]
+    for i in manual:
+        print(f"\nStill needed (run yourself): {i['manual']}")
+
+
+if __name__ == "__main__":
+    _cli()
