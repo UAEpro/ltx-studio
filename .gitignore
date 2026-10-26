@@ -1,0 +1,16 @@
+# Allowlist: only the project's code and docs are published.
+# Models, films, renders, the LTX-2 engine checkout, studio state and secrets stay local.
+/*
+!/.gitignore
+!/README.md
+!/LICENSE
+!/CLAUDE.md
+!/docs/
+!/ltxgen/
+
+# python / local
+.venv/
+__pycache__/
+*.pyc
+*.bak
+/ltxgen/config.json

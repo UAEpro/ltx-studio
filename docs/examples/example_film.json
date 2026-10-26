@@ -1,0 +1,79 @@
+{
+  "id": "F01",
+  "title": "Night Ferry",
+  "logline": "On the last ferry across the Bosphorus, an old Istanbul tea seller helps a young Japanese backpacker who has lost her passport, and the two strangers search the boat together as the city lights slide past.",
+  "aspect": "16:9",
+  "output_size": [
+    1280,
+    704
+  ],
+  "transition": "cut",
+  "style": "Warm, gentle night drama, sodium orange and teal city lights reflected on dark water, tulip tea glasses glowing amber, soft film grain, steady handheld camera, realistic 35mm film look.",
+  "dialogue_lang": "tr",
+  "seed": 1000,
+  "length_s": 28,
+  "cast": {
+    "HASAN": {
+      "role": "the tea seller",
+      "desc": "a Turkish man in his late sixties with a thick white moustache, short white hair and a lined friendly face, wearing a plain white short-sleeved shirt, a dark brown waistcoat, dark grey trousers and black leather shoes"
+    },
+    "YUKI": {
+      "role": "the backpacker",
+      "desc": "a Japanese woman of about twenty-four with a black bob haircut and dark eyes, wearing a plain olive green rain jacket, a plain grey hoodie underneath, black jeans, white trainers and a large plain blue backpack"
+    }
+  },
+  "locations": {
+    "DECK": {
+      "desc": "the open rear deck of an old white Istanbul passenger ferry at night, with wooden benches, railings and the lit city skyline across the dark Bosphorus",
+      "prompt": "The open rear deck of an old white Istanbul passenger ferry at night: rows of slatted wooden benches, white painted railings, a red Turkish flag at the stern, the lit mosques and bridges of Istanbul across the dark Bosphorus water, clear night sky, no people, static wide shot, realistic photography."
+    }
+  },
+  "props": {
+    "TRAY": {
+      "desc": "a round silver-coloured metal serving tray hanging from three chains joined at a ring handle, carrying small tulip-shaped glasses of dark red tea on saucers",
+      "role": "his round hanging tea tray with small tulip glasses of tea"
+    },
+    "PASSPORT": {
+      "desc": "a dark red Japanese passport booklet with a gold chrysanthemum emblem on the cover"
+    }
+  },
+  "shots": [
+    {
+      "id": "s01",
+      "seconds": 7,
+      "cast": [
+        "YUKI"
+      ],
+      "location": "DECK",
+      "prompt": "YUKI stands at the railing of the rear deck taking a photo of the lit city with her phone, smiling, her backpack on her shoulders. Medium shot, city lights behind her. Audio: wind, water, a camera shutter click."
+    },
+    {
+      "id": "s02",
+      "seconds": 7,
+      "cast": [
+        "HASAN"
+      ],
+      "location": "DECK",
+      "prompt": "HASAN steps out onto the deck with TRAY, sees the young woman kneeling among her scattered things, and slows down. Medium shot. Audio: the door creaking, wind."
+    },
+    {
+      "id": "s03",
+      "seconds": 7,
+      "cast": [
+        "HASAN",
+        "YUKI"
+      ],
+      "location": "DECK",
+      "prompt": "HASAN sets a glass of tea on the bench beside YUKI and crouches down. Medium two-shot. Audio: he says in Turkish \"Bir şey mi kaybettin, kızım?\", she answers in English \"My passport. My flight is tomorrow.\"."
+    },
+    {
+      "id": "s04",
+      "seconds": 7,
+      "cast": [
+        "HASAN"
+      ],
+      "location": "DECK",
+      "prompt": "HASAN dives forward onto his knees and grabs PASSPORT just as the wind lifts it, holding it up triumphantly. Medium shot. Audio: a thump, his laugh, the wind gusting."
+    }
+  ]
+}

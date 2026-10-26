@@ -1,0 +1,35 @@
+{
+  "title": "Robot and the Flower",
+  "preset": "draft",
+  "aspect": "16:9",
+  "seed": 100,
+  "seconds": 5,
+  "style": "Cinematic film still look, anamorphic 35mm lens, soft volumetric light, muted teal and amber palette, fine film grain.",
+  "transition": "fade",
+  "fade_seconds": 0.4,
+  "shots": [
+    {
+      "id": "s01",
+      "seconds": 6,
+      "prompt": "A wide establishing shot slowly pushes in over a ruined city at dawn, collapsed skyscrapers overgrown with vines and drifting dust. A small rusty robot with one glowing blue eye walks alone along a cracked highway, its metal feet clanking softly. Wind howls between the buildings and distant metal creaks."
+    },
+    {
+      "id": "s02",
+      "continue_from_previous": true,
+      "prompt": "The small rusty robot stops and tilts its head, its blue eye flickering as it notices something at its feet. The camera moves down to a low angle close-up: a single red flower growing through a crack in the asphalt, swaying in the breeze. A soft curious electronic chirp, quiet wind."
+    },
+    {
+      "id": "s03",
+      "prompt": "Close-up of the robot's dented metal hands gently cupping the red flower without picking it, fingers trembling slightly. Shallow depth of field, warm morning sunlight catches dust in the air. A gentle music box melody begins, soft mechanical whirring."
+    },
+    {
+      "id": "s04",
+      "prompt": "Dark storm clouds roll rapidly over the ruined skyline, lightning flashes in the distance. Wide shot: the small robot crouches over the red flower, spreading its arms to shield it as heavy rain starts to fall and wind whips debris across the road. Thunder rumbles, rain pours loudly."
+    },
+    {
+      "id": "s05",
+      "continue_from_previous": true,
+      "prompt": "The storm passes and golden sunlight breaks through the clouds. The rain-soaked robot slowly straightens up, revealing the red flower intact and glistening with droplets. The camera slowly pulls back and rises into a wide shot. Birds chirp, water drips, the music box melody returns warmly."
+    }
+  ]
+}

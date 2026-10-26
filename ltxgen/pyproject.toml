@@ -1,0 +1,21 @@
+[project]
+name = "ltxgen"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=2.1.0",
+    "fastapi>=0.159.1",
+    "faster-whisper>=1.2.1",
+    "mcp[cli]<2",
+    "opencv-python-headless>=5.0.0.93",
+    "python-multipart>=0.0.32",
+    "rembg[cpu]>=2.0.86",
+    "uvicorn[standard]>=0.54.0",
+    "huggingface-hub",
+    "pillow",
+    "numpy",
+    "unidecode",
+    "opencc-python-reimplemented",
+    "num2words",
+    "pykakasi",
+]

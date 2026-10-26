@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LTX Studio</title>
+<link rel="stylesheet" href="/static/app.css?v=4">
+</head>
+<body>
+<header class="top">
+  <div class="brand">LTX Studio <span class="muted">· LTX-2.5</span></div>
+  <nav>
+    <button data-tab="create" class="tab active">New film</button>
+    <button data-tab="projects" class="tab">Projects</button>
+    <button data-tab="workers" class="tab">Workers <span id="worker-badge" class="pill"></span></button>
+  </nav>
+</header>
+
+<main>
+  <!-- CREATE -->
+  <section id="tab-create" class="panel">
+    <div class="grid2">
+      <div class="card">
+        <h2>1 · Scenario</h2>
+        <p class="muted">Describe your story. A local Gemma (or Claude) turns it into a shot-by-shot storyboard.</p>
+        <textarea id="scenario" rows="10" placeholder="A lonely maintenance robot in a flooded city finds a sunflower growing on a rooftop and protects it through a storm. Bittersweet, ~45 seconds."></textarea>
+        <input id="notes" placeholder="Optional direction: length, style, vertical video, language of dialogue…">
+        <div class="row">
+          <label>Writer <select id="engine"></select></label>
+          <button id="btn-claude" class="primary">Write storyboard</button>
+          <button id="btn-copy-prompt">Copy prompt for claude.ai</button>
+        </div>
+        <p id="claude-hint" class="muted small"></p>
+      </div>
+      <div class="card">
+        <h2>2 · Storyboard</h2>
+        <p class="muted">Paste the JSON Claude wrote (or edit the generated one).</p>
+        <textarea id="storyboard" rows="14" spellcheck="false" placeholder='{"title": "...", "shots": [{"id": "s01", "prompt": "..."}]}'></textarea>
+        <div class="row">
+          <label>Quality <select id="ov-preset"><option value="">from JSON</option><option>draft</option><option>standard</option><option>quality</option></select></label>
+          <label>Aspect <select id="ov-aspect"><option value="">from JSON</option><option>16:9</option><option>9:16</option><option>1:1</option><option>4:3</option><option>3:4</option></select></label>
+          <button id="btn-example">Load example</button>
+          <button id="btn-validate">Preview</button>
+        </div>
+      </div>
+    </div>
+    <div class="card" id="preview-card" hidden>
+      <div class="row between">
+        <h2 id="pv-title">Preview</h2>
+        <button id="btn-start" class="primary">Start rendering</button>
+      </div>
+      <p id="pv-summary" class="muted"></p>
+      <table class="shots-table"><thead><tr><th>Shot</th><th>Sec</th><th>Link</th><th>Prompt</th><th>Reference picture</th></tr></thead><tbody id="pv-rows"></tbody></table>
+    </div>
+  </section>
+
+  <!-- PROJECTS -->
+  <section id="tab-projects" class="panel" hidden>
+    <div id="project-list" class="list"></div>
+    <div id="project-view" hidden>
+      <div class="row between">
+        <div>
+          <button id="btn-back" class="ghost">← Projects</button>
+          <h2 id="pj-title"></h2>
+          <p id="pj-meta" class="muted"></p>
+        </div>
+        <div class="row">
+          <button id="btn-stitch">Stitch now</button>
+          <button id="btn-final-standard">Final pass: standard</button>
+          <button id="btn-final-quality">Final pass: quality</button>
+          <button id="btn-delete" class="danger">Delete</button>
+        </div>
+      </div>
+      <div id="pj-final" class="card" hidden>
+        <h3>Final film</h3>
+        <video id="pj-final-video" controls preload="metadata"></video>
+        <div class="row"><a id="pj-final-dl" class="button primary" download>Download final.mp4</a><span id="pj-final-info" class="muted"></span></div>
+      </div>
+      <div id="pj-shots" class="shots"></div>
+    </div>
+  </section>
+
+  <!-- WORKERS -->
+  <section id="tab-workers" class="panel" hidden>
+    <div class="card">
+      <h2>Render workers</h2>
+      <p class="muted">Every PC with a GPU runs one worker; each renders whole shots in parallel.</p>
+      <table class="shots-table"><thead><tr><th>Worker</th><th>GPU</th><th>Presets</th><th>Status</th><th>Current</th><th>Done</th><th>Seen</th></tr></thead><tbody id="wk-rows"></tbody></table>
+      <p id="wk-queue" class="muted"></p>
+    </div>
+    <div class="card">
+      <h3>Add a PC (one step)</h3>
+      <p class="muted">Download the join file, copy it to the new PC (NVIDIA driver installed) and double-click it.
+        It copies everything from this PC and the other joined PCs in parallel, verifies every piece, installs,
+        and joins the farm as a worker that starts automatically.</p>
+      <div class="row"><a class="button primary" href="/join" download>Download join file</a>
+        <span id="dist-status" class="muted small"></span></div>
+      <p class="muted small">The join file contains this studio's worker token: share it only with your own PCs.
+        Manual setup: <code>ltxgen/studio/deploy/README_DISTRIBUTED.md</code>. Token file: <code id="wk-token-file"></code></p>
+    </div>
+  </section>
+</main>
+<div id="toast" hidden></div>
+<script src="/static/app.js?v=4"></script>
+</body>
+</html>
